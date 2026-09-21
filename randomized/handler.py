@@ -1,41 +1,73 @@
-from aiogram import Router, F
-from aiogram.filters import Command, CommandStart
+from aiogram import Router, Bot
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import (
     Message,
-    CallbackQuery,
     InlineKeyboardMarkup,
-    InlineKeyboardButton,
+    InlineKeyboardButton
 )
+
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+
+import uuid
+
 
 router = Router()
 
 
-# =========================
+# =========================================================
 # НАСТРОЙКИ
-# =========================
+# =========================================================
 
 ADMIN_ID = 8127860525
 
-# Username твоего бота БЕЗ @
+# Username бота БЕЗ @
 BOT_USERNAME = "YOUR_BOT_USERNAME"
 
 
-# =========================
-# ДАННЫЕ В ПАМЯТИ
-# =========================
+# =========================================================
+# РОЗЫГРЫШИ В ПАМЯТИ
+# =========================================================
 
-giveaway_active = False
-giveaway_id = 0
-giveaway_title = ""
+giveaways = {}
 
-participants = {}
+# Формат:
+#
+# giveaways[giveaway_id] = {
+#     "title": "...",
+#     "channel": "...",
+#     "participants": {
+#         user_id: "@username"
+#     },
+#     "active": True
+# }
 
 
-# =========================
+# =========================================================
+# СОСТОЯНИЯ СОЗДАНИЯ
+# =========================================================
+
+class CreateGiveaway(StatesGroup):
+    text = State()
+    channel = State()
+
+
+# =========================================================
+# СОСТОЯНИЯ ИТОГОВ
+# =========================================================
+
+class Results(StatesGroup):
+    giveaway_id = State()
+    winner = State()
+    channel = State()
+
+
+# =========================================================
 # КНОПКА УЧАСТИЯ
-# =========================
+# =========================================================
 
-def giveaway_button():
+def giveaway_keyboard(giveaway_id: str):
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -48,257 +80,524 @@ def giveaway_button():
     )
 
 
-# =========================
+# =========================================================
+# ПРОВЕРКА АДМИНА
+# =========================================================
+
+def is_admin(message: Message):
+
+    return message.from_user.id == ADMIN_ID
+
+
+# =========================================================
 # /START
-# =========================
+# =========================================================
 
 @router.message(CommandStart())
-async def start_handler(message: Message):
-    global giveaway_active
+async def start_handler(
+    message: Message,
+    command: CommandObject
+):
 
-    args = message.text.split(maxsplit=1)
+    # Если человек пришёл по кнопке участия
+    if command.args and command.args.startswith("join_"):
 
-    # Если человек пришёл по кнопке розыгрыша
-    if len(args) > 1 and args[1].startswith("join_"):
+        giveaway_id = command.args.replace("join_", "", 1)
 
-        if not giveaway_active:
+        # Проверяем существование
+        if giveaway_id not in giveaways:
+
             await message.answer(
-                "❌ Сейчас нет активного розыгрыша."
+                "❌ Розыгрыш не найден или уже завершён."
             )
             return
 
-        try:
-            joined_id = int(args[1].replace("join_", ""))
-        except ValueError:
-            await message.answer("❌ Неверная ссылка на розыгрыш.")
-            return
+        giveaway = giveaways[giveaway_id]
 
-        if joined_id != giveaway_id:
+        # Проверяем активность
+        if not giveaway["active"]:
+
             await message.answer(
-                "❌ Этот розыгрыш уже неактивен."
+                "❌ Этот розыгрыш уже завершён."
             )
             return
 
         user_id = message.from_user.id
 
-        if user_id in participants:
+        # Проверяем повторное участие
+        if user_id in giveaway["participants"]:
+
             await message.answer(
                 "ℹ️ Вы уже участвуете в этом розыгрыше!"
             )
             return
 
-        username = message.from_user.username
+        # Получаем username
+        if message.from_user.username:
 
-        if username:
-            name = f"@{username}"
+            username = f"@{message.from_user.username}"
+
         else:
-            name = message.from_user.full_name
 
-        participants[user_id] = name
+            username = message.from_user.full_name
+
+        # Добавляем участника
+        giveaway["participants"][user_id] = username
 
         await message.answer(
             "✅ <b>Теперь вы участвуете в розыгрыше!</b>\n\n"
-            f"🎁 Розыгрыш: <b>{giveaway_title}</b>\n\n"
-            "Удачи! 🍀"
+            f"🎁 Розыгрыш: <b>{giveaway['title']}</b>\n\n"
+            "Удачи! 🍀",
+            parse_mode="HTML"
         )
 
         return
 
     # Обычный /start
+
     await message.answer(
-        "👋 Привет!\n\n"
-        "Здесь проходят розыгрыши."
+        "👋 <b>Добро пожаловать!</b>\n\n"
+        "Это бот для проведения розыгрышей.\n\n"
+        "🎁 Здесь можно создавать розыгрыши "
+        "и смотреть участников.",
+        parse_mode="HTML"
     )
 
 
-# =========================
-# ПРОВЕРКА АДМИНА
-# =========================
+# =========================================================
+# /createkon
+# =========================================================
 
-def is_admin(message: Message) -> bool:
-    return message.from_user.id == ADMIN_ID
-
-
-# =========================
-# СОЗДАНИЕ РОЗЫГРЫША
-# =========================
-
-@router.message(Command("create"))
-async def create_giveaway(message: Message):
-    global giveaway_active
-    global giveaway_id
-    global giveaway_title
-    global participants
+@router.message(Command("createkon"))
+async def create_giveaway(
+    message: Message,
+    state: FSMContext
+):
 
     if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
-        return
 
-    # После /create берём название
-    text = message.text.replace("/create", "", 1).strip()
-
-    if not text:
         await message.answer(
-            "❗ Напиши название розыгрыша после команды.\n\n"
-            "Пример:\n"
-            "<code>/create Розыгрыш на Яд</code>"
+            "❌ У вас нет доступа."
         )
         return
 
-    giveaway_id += 1
-    giveaway_title = text
-    giveaway_active = True
-    participants = {}
+    await message.answer(
+        "🎁 <b>Создание розыгрыша</b>\n\n"
+        "Введите текст/название розыгрыша.\n\n"
+        "Например:\n"
+        "<code>Розыгрыш на Яд</code>",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(CreateGiveaway.text)
+
+
+# =========================================================
+# ПОЛУЧАЕМ ТЕКСТ
+# =========================================================
+
+@router.message(CreateGiveaway.text)
+async def giveaway_text(
+    message: Message,
+    state: FSMContext
+):
+
+    await state.update_data(
+        text=message.text
+    )
+
+    await message.answer(
+        "📢 Теперь отправь username канала.\n\n"
+        "Например:\n"
+        "<code>@blox_fight</code>\n\n"
+        "⚠️ Бот должен быть администратором канала.",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(CreateGiveaway.channel)
+
+
+# =========================================================
+# ПОЛУЧАЕМ КАНАЛ И СОЗДАЁМ
+# =========================================================
+
+@router.message(CreateGiveaway.channel)
+async def giveaway_channel(
+    message: Message,
+    state: FSMContext,
+    bot: Bot
+):
+
+    channel = message.text.strip()
+
+    if not channel.startswith("@"):
+
+        await message.answer(
+            "❌ Username канала должен начинаться с @\n\n"
+            "Например: <code>@blox_fight</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    data = await state.get_data()
+
+    title = data["text"]
+
+    # Создаём ID
+    giveaway_id = uuid.uuid4().hex[:8]
+
+    # Сохраняем в память
+    giveaways[giveaway_id] = {
+        "title": title,
+        "channel": channel,
+        "participants": {},
+        "active": True
+    }
+
+    # Отправляем розыгрыш в канал
+    try:
+
+        await bot.send_message(
+            chat_id=channel,
+            text=(
+                f"🎁 <b>{title}</b>\n\n"
+                "Чтобы принять участие, нажмите кнопку ниже 👇"
+            ),
+            parse_mode="HTML",
+            reply_markup=giveaway_keyboard(giveaway_id)
+        )
+
+    except Exception as e:
+
+        # Если не получилось отправить
+        del giveaways[giveaway_id]
+
+        await message.answer(
+            "❌ Не удалось отправить сообщение в канал.\n\n"
+            "Проверь:\n"
+            "• бот добавлен в канал\n"
+            "• бот является администратором\n"
+            "• username канала указан правильно\n\n"
+            f"Ошибка: <code>{e}</code>",
+            parse_mode="HTML"
+        )
+
+        await state.clear()
+        return
 
     await message.answer(
         "✅ <b>Розыгрыш создан!</b>\n\n"
-        f"🎁 Название: <b>{giveaway_title}</b>\n"
-        f"🆔 ID: <code>{giveaway_id}</code>\n\n"
-        "Добавь эту кнопку в пост канала:\n"
-        f"https://t.me/{BOT_USERNAME}?start=join_{giveaway_id}"
+        f"🎁 Приз: <b>{title}</b>\n"
+        f"🆔 ID: <code>{giveaway_id}</code>\n"
+        f"📢 Канал: {channel}\n"
+        "👥 Участники: 0",
+        parse_mode="HTML"
     )
 
-
-# =========================
-# ПОКАЗАТЬ КНОПКУ
-# =========================
-
-@router.message(Command("button"))
-async def send_button(message: Message):
-
-    if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
-        return
-
-    if not giveaway_active:
-        await message.answer(
-            "❌ Сначала создай розыгрыш через /create"
-        )
-        return
-    await message.answer(
-        f"🎁 <b>{giveaway_title}</b>\n\n"
-        "Нажми кнопку ниже, чтобы принять участие 👇",
-        reply_markup=giveaway_button()
-    )
+    await state.clear()
 
 
-# =========================
-# КОЛИЧЕСТВО УЧАСТНИКОВ
-# =========================
+# =========================================================
+# /participants
+# =========================================================
 
 @router.message(Command("participants"))
-async def show_participants(message: Message):
+async def participants_handler(
+    message: Message
+):
 
     if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
-        return
 
-    if not giveaway_active:
-        await message.answer("❌ Нет активного розыгрыша.")
-        return
-
-    if not participants:
         await message.answer(
-            "👥 Участников пока нет."
+            "❌ У вас нет доступа."
+        )
+        return
+
+    active = [
+        (gid, data)
+        for gid, data in giveaways.items()
+        if data["active"]
+    ]
+
+    if not active:
+
+        await message.answer(
+            "❌ Активных розыгрышей нет."
         )
         return
 
     text = "👥 <b>Участники:</b>\n\n"
 
-    for number, username in enumerate(participants.values(), 1):
-        text += f"{number}. {username}\n"
+    for giveaway_id, giveaway in active:
 
-    text += f"\nВсего участников: <b>{len(participants)}</b>"
-
-    await message.answer(text)
-
-
-# =========================
-# ВЫБОР ПОБЕДИТЕЛЯ ВРУЧНУЮ
-# =========================
-
-@router.message(Command("winner"))
-async def choose_winner(message: Message):
-    global giveaway_active
-
-    if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
-        return
-
-    if not giveaway_active:
-        await message.answer(
-            "❌ Нет активного розыгрыша."
+        text += (
+            f"🎁 <b>{giveaway['title']}</b>\n"
+            f"🆔 ID: <code>{giveaway_id}</code>\n"
+            f"👥 Участников: "
+            f"<b>{len(giveaway['participants'])}</b>\n\n"
         )
-        return
-
-    text = message.text.replace("/winner", "", 1).strip()
-
-    if not text:
-        await message.answer(
-            "❗ Укажи победителя.\n\n"
-            "Пример:\n"
-            "<code>/winner @username</code>"
-        )
-        return
-
-    winner = text
 
     await message.answer(
-        "🏆 <b>РОЗЫГРЫШ ЗАВЕРШЁН!</b>\n\n"
-        f"🎁 Приз: <b>{giveaway_title}</b>\n\n"
-        f"🥇 Победитель: <b>{winner}</b>\n\n"
-        "🎉 Поздравляем!"
-    )
-
-    giveaway_active = False
-
-
-# =========================
-# ОСТАНОВИТЬ РОЗЫГРЫШ
-# =========================
-
-@router.message(Command("stop"))
-async def stop_giveaway(message: Message):
-    global giveaway_active
-
-    if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
-        return
-
-    if not giveaway_active:
-        await message.answer(
-            "❌ Нет активного розыгрыша."
-        )
-        return
-
-    giveaway_active = False
-
-    await message.answer(
-        "🛑 <b>Розыгрыш остановлен.</b>"
+        text,
+        parse_mode="HTML"
     )
 
 
-# =========================
-# ПОКАЗАТЬ ТЕКУЩИЙ РОЗЫГРЫШ
-# =========================
+# =========================================================
+# /status
+# =========================================================
 
 @router.message(Command("status"))
-async def status(message: Message):
+async def status_handler(
+    message: Message
+):
 
     if not is_admin(message):
-        await message.answer("❌ У вас нет доступа.")
+
+        await message.answer(
+            "❌ У вас нет доступа."
+        )
         return
 
-    if not giveaway_active:
+    active = [
+        (gid, data)
+        for gid, data in giveaways.items()
+        if data["active"]
+    ]
+
+    if not active:
+
         await message.answer(
-            "❌ Сейчас нет активного розыгрыша."
+            "❌ Сейчас нет активных розыгрышей."
+        )
+        return
+
+    text = "📊 <b>Активные розыгрыши:</b>\n\n"
+
+    for giveaway_id, giveaway in active:
+
+        text += (
+            f"🎁 {giveaway['title']}\n"
+            f"🆔 <code>{giveaway_id}</code>\n"
+            f"👥 {len(giveaway['participants'])} участников\n\n"
+        )
+
+    await message.answer(
+        text,
+        parse_mode="HTML"
+    )
+
+
+# =========================================================
+# /itogi
+# =========================================================
+
+@router.message(Command("itogi"))
+async def results_start(
+    message: Message,
+    state: FSMContext
+):
+
+    if not is_admin(message):
+
+        await message.answer(
+            "❌ У вас нет доступа."
         )
         return
 
     await message.answer(
-        "📊 <b>Текущий розыгрыш</b>\n\n"
-        f"🎁 Приз: <b>{giveaway_title}</b>\n"
-        f"🆔 ID: <code>{giveaway_id}</code>\n"
-        f"👥 Участников: <b>{len(participants)}</b>"
+        "🏆 Введите ID конкурса.\n\n"
+        "Например:\n"
+        "<code>a82f91cd</code>",
+        parse_mode="HTML"
     )
-   
+
+    await state.set_state(
+        Results.giveaway_id
+    )
+
+
+# =========================================================
+# ПОЛУЧАЕМ ID
+# =========================================================
+
+@router.message(Results.giveaway_id)
+async def results_id(
+    message: Message,
+    state: FSMContext
+):
+
+    giveaway_id = message.text.strip()
+
+    if giveaway_id not in giveaways:
+
+        await message.answer(
+            "❌ Розыгрыш с таким ID не найден.\n\n"
+            "Попробуй ещё раз."
+        )
+        return
+
+    giveaway = giveaways[giveaway_id]
+
+    if not giveaway["participants"]:
+
+        await message.answer(
+            "❌ В этом розыгрыше нет участников."
+        )
+        return
+
+    await state.update_data(
+        giveaway_id=giveaway_id
+    )
+
+    await message.answer(
+        "🥇 Введи username победителя.\n\n"
+        "Например:\n"
+        "<code>@username</code>",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(
+        Results.winner
+    )
+
+
+# =========================================================
+# ПОЛУЧАЕМ ПОБЕДИТЕЛЯ
+# =========================================================
+
+@router.message(Results.winner)
+async def results_winner(
+    message: Message,
+    state: FSMContext
+):
+
+    winner = message.text.strip()
+
+    await state.update_data(
+        winner=winner
+    )
+
+    await message.answer(
+        "📢 Введи username канала, куда отправить итоги.\n\n"
+        "Например:\n"
+        "<code>@blox_fight</code>",
+        parse_mode="HTML"
+    )
+
+    await state.set_state(
+        Results.channel
+    )
+
+
+# =========================================================
+# ОТПРАВЛЯЕМ ИТОГИ
+# =========================================================
+
+@router.message(Results.channel)
+async def results_channel(
+    message: Message,
+    state: FSMContext,
+    bot: Bot
+):
+
+    channel = message.text.strip()
+
+    if not channel.startswith("@"):
+
+        await message.answer(
+            "❌ Username канала должен начинаться с @."
+        )
+        return
+
+    data = await state.get_data()
+
+    giveaway_id = data["giveaway_id"]
+    winner = data["winner"]
+
+    giveaway = giveaways[giveaway_id]
+
+    # Текстовая таблица
+    results_text = (
+        f"🏆 <b>ИТОГИ КОНКУРСА #{giveaway_id}</b>\n\n"
+        f"🎁 Приз: <b>{giveaway['title']}</b>\n\n"
+        "┌──────────┬────────────────────┐\n"
+        "│ Место    │ Username           │\n"
+        "├──────────┼────────────────────┤\n"
+        f"│ 🥇 1      │ {winner:<18} │\n"
+        "└──────────┴────────────────────┘\n\n"
+        "⏰ Отпишите в течение 1 часа "
+        "нашему администратору или же приз сгорит!\n\n"
+        "🎉 Поздравляем победителя!"
+    )
+
+    try:
+
+       await bot.send_message(
+            chat_id=channel,
+            text=results_text,
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+
+        await message.answer(
+            "❌ Не удалось отправить итоги.\n\n"
+            f"Ошибка: <code>{e}</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Завершаем розыгрыш
+    giveaway["active"] = False
+    giveaway["winner"] = winner
+
+    await message.answer(
+        "✅ <b>Итоги были отправлены!</b>\n\n"
+        f"🥇 Победитель: {winner}\n"
+        f"🎁 Приз: {giveaway['title']}",
+        parse_mode="HTML"
+    )
+
+    await state.clear()
+
+
+# =========================================================
+# /stop
+# =========================================================
+
+@router.message(Command("stop"))
+async def stop_giveaway(
+    message: Message
+):
+
+    if not is_admin(message):
+
+        await message.answer(
+            "❌ У вас нет доступа."
+        )
+        return
+
+    active = [
+        (gid, data)
+        for gid, data in giveaways.items()
+        if data["active"]
+    ]
+
+    if not active:
+
+        await message.answer(
+            "❌ Активных розыгрышей нет."
+        )
+        return
+
+    giveaway_id, giveaway = active[-1]
+
+    giveaway["active"] = False
+
+    await message.answer(
+        "🛑 <b>Розыгрыш остановлен.</b>\n\n"
+        f"🎁 {giveaway['title']}\n"
+        f"🆔 <code>{giveaway_id}</code>",
+        parse_mode="HTML"
+    )
