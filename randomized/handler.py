@@ -22,7 +22,7 @@ router = Router()
 ADMIN_ID = 8127860525
 
 # Username бота БЕЗ @
-randomized = "randomized_473_bot"
+BOT_USERNAME = "YOUR_BOT_USERNAME"
 
 
 # =========================================================
