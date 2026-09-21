@@ -14,7 +14,7 @@ router = Router()
 # НАСТРОЙКИ
 # =========================
 
-ADMIN_ID = 123456789
+ADMIN_ID = 8127860525
 
 # Username твоего бота БЕЗ @
 BOT_USERNAME = "YOUR_BOT_USERNAME"
