@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 
 from aiohttp import web
@@ -40,14 +41,14 @@ async def start_web_server():
 
 
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
+    logging.basicConfig(level=logging.INFO)
 
     await start_web_server()
 
-    print("Bot started")
+    print("Bot is running!")
 
     await dp.start_polling(bot)
 
 
-if __name__ == "__main__":
+if name == "main":
     asyncio.run(main())
