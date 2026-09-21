@@ -180,3 +180,225 @@ async def giveaway_channel(
             f"📢 Канал: {channel}\n\n"
             "Участники могут нажимать кнопку «Участвовать»."
         )
+
+    except Exception as e:
+        await message.answer(
+            "❌ Не удалось отправить розыгрыш в канал.\n\n"
+            "Проверь:\n"
+            "• правильность username канала;\n"
+            "• бот является администратором;\n"
+            "• у бота есть право отправлять сообщения."
+        )
+
+        print(e)
+
+    await state.clear()
+
+
+# =========================
+# УЧАСТИЕ
+# =========================
+
+@router.callback_query(F.data.startswith("join_"))
+async def join_giveaway(
+    callback: CallbackQuery
+):
+    giveaway_id = callback.data.replace("join_", "")
+
+    if giveaway_id not in giveaways:
+        await callback.answer(
+            "❌ Розыгрыш не найден",
+            show_alert=True
+        )
+        return
+
+    user = callback.from_user
+
+    if user.id in participants[giveaway_id]:
+        await callback.answer(
+            "⚠️ Ты уже участвуешь!",
+            show_alert=True
+        )
+        return
+
+    participants[giveaway_id].append(user.id)
+
+    await callback.answer(
+        "✅ Ты участвуешь в розыгрыше!"
+    )
+
+
+# =========================
+# ВЫБОР ПОБЕДИТЕЛЯ
+# =========================
+
+@router.callback_query(F.data == "choose_winner")
+async def choose_winner(
+    callback: CallbackQuery
+):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer(
+            "❌ У тебя нет доступа",
+            show_alert=True
+        )
+        return
+
+    if not giveaways:
+        await callback.message.answer(
+            "❌ Пока нет созданных розыгрышей."
+        )
+        await callback.answer()
+        return
+
+    buttons = []
+
+    for giveaway_id, giveaway in giveaways.items():
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🎁 {giveaway['prize']}",
+                callback_data=f"winner_{giveaway_id}"
+            )
+        ])
+
+    await callback.message.answer(
+        "🏆 Выбери розыгрыш:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=buttons
+        )
+    )
+
+    await callback.answer()
+
+
+# =========================
+# СПИСОК УЧАСТНИКОВ
+# =========================
+
+@router.callback_query(F.data.startswith("winner_"))
+async def winner_list(
+    callback: CallbackQuery,
+    bot: Bot
+):
+    giveaway_id = callback.data.replace("winner_", "")
+
+    if giveaway_id not in giveaways:
+        await callback.answer(
+            "❌ Розыгрыш не найден",
+            show_alert=True
+        )
+        return
+
+    users = participants[giveaway_id]
+
+    if not users:
+        await callback.message.answer(
+            "❌ В этом розыгрыше пока нет участников."
+        )
+        await callback.answer()
+        return
+
+    buttons = []
+
+    for user_id in users:
+        try:
+            user = await bot.get_chat(user_id)
+
+            username = (
+                f"@{user.username}"
+                if user.username
+                else user.first_name
+            )
+
+        except Exception:
+            username = str(user_id)
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🏆 {username}",
+                callback_data=f"setwinner_{giveaway_id}_{user_id}"
+            )
+        ])
+
+    await callback.message.answer(
+        f"🏆 <b>Выбор победителя</b>\n\n"
+        f"🎁 Приз: <b>{giveaways[giveaway_id]['prize']}</b>\n"
+        f"👥 Участников: <b>{len(users)}</b>\n\n"
+        "Нажми на участника, которого хочешь сделать победителем:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=buttons
+        )
+    )
+
+    await callback.answer()
+
+
+# =========================
+# НАЗНАЧИТЬ ПОБЕДИТЕЛЯ
+# =========================
+
+@router.callback_query(F.data.startswith("setwinner_"))
+async def set_winner(
+    callback: CallbackQuery,
+    bot: Bot
+):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer(
+            "❌ Нет доступа",
+            show_alert=True
+        )
+        return
+
+    parts = callback.data.split("_")
+
+    giveaway_id = parts[1]
+    winner_id = int(parts[2])
+
+    if giveaway_id not in giveaways:
+        await callback.answer(
+            "❌ Розыгрыш не найден",
+            show_alert=True
+        )
+        return
+
+    giveaway = giveaways[giveaway_id]
+
+    try:
+        winner = await bot.get_chat(winner_id)
+
+        username = (
+            f"@{winner.username}"
+            if winner.username
+            else winner.first_name
+        )
+
+    except Exception:
+        username = str(winner_id)
+
+    result_text = (
+        "🏆 <b>ИТОГИ РОЗЫГРЫША</b>\n\n"
+        f"🎁 Приз: <b>{giveaway['prize']}</b>\n\n"
+        f"🥇 Победитель: <b>{username}</b>\n\n"
+        "🎉 Поздравляем!"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=giveaway["channel"],
+            text=result_text,
+            parse_mode="HTML"
+        )
+
+        await callback.message.answer(
+            "✅ Победитель выбран!\n\n"
+            f"🥇 {username}\n"
+            f"🎁 Приз: {giveaway['prize']}"
+        )
+
+    except Exception as e:
+        await callback.message.answer(
+            "❌ Не удалось отправить итоги в канал."
+        )
+        print(e)
+
+    await callback.answer()
