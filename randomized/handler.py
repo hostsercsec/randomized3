@@ -1,127 +1,228 @@
-from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram import Router, F, Bot
-from aiogram.types import Message
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
-import kb
-from aiogram.types import InputRichMessage, InputRichBlockParagraph, InputRichBlockTable, RichBlockTableCell
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-
-class Form(StatesGroup):
-    textt = State()
-    username = State()
-
-class It(StatesGroup):
-    idkon = State()
-    usern = State()
-    userk = State()
-
+import random
 
 router = Router()
 
+participants = []
+giveaway_active = False
 
-@router.message(CommandStart())
-async def main(message: Message, command: CommandObject):
-    if command.args == 'kon25289583':
-         await message.answer('(!) Теперь вы участвуете в розыгрыше!')
-         return
-    await message.answer('Добро пожаловать в бот randomize!\nЭто бот для проведения разных розыгрышей!')
 
-@router.message(Command('createkon'))
-async def create(message: Message, state: FSMContext):
-    if message.from_user.id == 8127860525:
-        await message.answer('Введите текст для розыгрыша')
-        await state.set_state(Form.textt)
-    else:
+def make_table(winner):
+    username = f"@{winner}" if not winner.startswith("@") else winner
+    username = username[:16].rjust(16)
+
+    return (
+        "┌─────┬──────────────────┐\n"
+        "│  №  │        Username  │\n"
+        "├─────┼──────────────────┤\n"
+        f"│  1  │ {username} │\n"
+        "└─────┴──────────────────┘"
+    )
+
+
+@router.message(Command("start"))
+async def start(message: Message):
+    keyboard = InlineKeyboardBuilder()
+
+    keyboard.button(
+        text="🎁 Создать розыгрыш",
+        callback_data="create_giveaway"
+    )
+
+    keyboard.button(
+        text="👥 Участники",
+        callback_data="participants"
+    )
+
+    keyboard.adjust(1)
+
+    await message.answer(
+        "🎉 <b>Розыгрыш</b>\n\n"
+        "Выбери действие:",
+        reply_markup=keyboard.as_markup()
+    )
+
+
+@router.callback_query(F.data == "create_giveaway")
+async def create_giveaway(callback: CallbackQuery):
+    global giveaway_active
+
+    giveaway_active = True
+    participants.clear()
+
+    keyboard = InlineKeyboardBuilder()
+
+    keyboard.button(
+        text="🎟 Участвовать",
+        callback_data="join_giveaway"
+    )
+
+    keyboard.button(
+        text="🏆 Выбрать победителя",
+        callback_data="choose_winner"
+    )
+
+    keyboard.adjust(1)
+
+    await callback.message.edit_text(
+        "🎁 <b>Розыгрыш создан!</b>\n\n"
+        "Нажми кнопку ниже, чтобы принять участие.",
+        reply_markup=keyboard.as_markup()
+    )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "join_giveaway")
+async def join_giveaway(callback: CallbackQuery):
+    if not giveaway_active:
+        await callback.answer(
+            "❌ Сейчас нет активного розыгрыша.",
+            show_alert=True
+        )
         return
 
-@router.message(Form.textt)
-async def text(message: Message, state: FSMContext):
-    await state.update_data(textt = message.text)
-    await message.answer("Введите username канала в какой надо отправить текст(Бот должен быть администратором в этом канале!)")
-    await state.set_state(Form.username)
+    username = callback.from_user.username
 
-@router.message(Form.username)
-async def user(message: Message, state: FSMContext, bot: Bot):
-     await state.update_data(username = message.text)
-     data = await state.get_data()
-     await bot.send_message(
-          chat_id=message.text,
-          text=data["textt"],
-          reply_markup=kb.kb
-     )
-     await message.answer('Розыгрыш был создан!')
-     await state.clear()
+    if not username:
+        username = callback.from_user.full_name
 
-@router.message(Command('itogi'))
-async def ito(message: Message, state: FSMContext):
-    if message.from_user.id == 8127860525:
-         await message.answer('Введите id конкурса')
-         await state.set_state(It.idkon)
+    if username not in participants:
+        participants.append(username)
+
+        await callback.answer(
+            "✅ Ты участвуешь в розыгрыше!"
+        )
     else:
-         return
+        await callback.answer(
+            "ℹ️ Ты уже участвуешь.",
+            show_alert=True
+        )
 
-@router.message(It.idkon)
-async def itoid(message: Message, state: FSMContext):
-     await state.update_data(idkon = message.text)
-     await message.answer('Введите username победителя')
-     await state.set_state(It.usern)
 
-@router.message(It.usern)
-async def usernn(message: Message, state: FSMContext):
-     await state.update_data(usern = message.text)
-     await message.answer('Введите username канала в который отправить итоги')
-     await state.set_state(It.userk)
+@router.callback_query(F.data == "participants")
+async def show_participants(callback: CallbackQuery):
+    if not participants:
+        await callback.answer(
+            "Пока никто не участвует.",
+            show_alert=True
+        )
+        return
 
-@router.message(It.userk)
-async def userk(message: Message, state: FSMContext, bot: Bot):
-    await state.update_data(userk = message.text)
-    data = await state.get_data()
-    await bot.send_rich_message(
-    chat_id=data["userk"],
-    rich_message=InputRichMessage(
-        blocks=[
-            InputRichBlockParagraph(
-                text=f"Итоги конкурса #{data['idkon']}"
-            ),
+    lines = [
+        "┌─────┬──────────────────┐",
+        "│  №  │        Username  │",
+        "├─────┼──────────────────┤"
+    ]
 
-            InputRichBlockTable(
-                cells=[
-                    [
-                        RichBlockTableCell(
-                            text="Место",
-                            is_header=True,
-                            align="center",
-                            valign="middle"
-                        ),
-                        RichBlockTableCell(
-                            text="Username",
-                            is_header=True,
-                            align="center",
-                            valign="middle"
-                        )
-                    ],
-                    [
-                        RichBlockTableCell(
-                            text="1",
-                            align="center",
-                            valign="middle"
-                        ),
-                        RichBlockTableCell(
-                            text=data["usern"],
-                            align="center",
-                            valign="middle"
-                        )
-                    ]
-                ],
-                is_bordered=True,
-                is_striped=True
-            ),
+    for i, username in enumerate(participants, 1):
+        username = f"@{username}" if not username.startswith("@") else username
+        username = username[:16].rjust(16)
 
-            InputRichBlockParagraph(
-                text="Отпишите в течении 1 часа нашему администратору или же приз сгорит!"
-            )
-        ]
-    ), reply_markup=kb.admin
-)
-    await message.answer('итоги были отправлены')
+        lines.append(
+            f"│ {i:^3} │ {username} │"
+        )
+
+    lines.append(
+        "└─────┴──────────────────┘"
+    )
+
+    table = "\n".join(lines)
+
+    await callback.message.answer(
+        "👥 <b>Участники</b>\n\n"
+        f"<pre>{table}</pre>"
+    )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "choose_winner")
+async def choose_winner(callback: CallbackQuery):
+    global giveaway_active
+
+    if not participants:
+        await callback.answer(
+            "❌ Нет участников!",
+            show_alert=True
+        )
+        return
+
+    winner = random.choice(participants)
+
+    giveaway_active = False
+
+    table = make_table(winner)
+
+    await callback.message.edit_text(
+        "🏆 <b>ИТОГИ РОЗЫГРЫША</b>\n\n"
+        f"<pre>{table}</pre>\n\n"
+        "🎉 Поздравляем победителя!"
+    )
+
+    await callback.answer(
+        "🏆 Победитель выбран!"
+    )
+
+
+@router.message(Command("add"))
+async def add_participant(message: Message):
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2:
+        await message.answer(
+            "❌ Используй:\n"
+            "<code>/add username</code>"
+        )
+        return
+
+    username = args[1].strip()
+
+    if username not in participants:
+        participants.append(username)
+
+        await message.answer(
+            f"✅ <b>{username}</b> добавлен!"
+        )
+    else:
+        await message.answer(
+            "ℹ️ Этот пользователь уже есть в списке."
+        )
+
+
+@router.message(Command("list"))
+async def participant_list(message: Message):
+    if not participants:
+        await message.answer(
+            "👥 Участников пока нет."
+        )
+        return
+
+    lines = [
+        "┌─────┬──────────────────┐",
+        "│  №  │        Username  │",
+        "├─────┼──────────────────┤"
+    ]
+
+    for i, username in enumerate(participants, 1):
+        username = f"@{username}" if not username.startswith("@") else username
+        username = username[:16].rjust(16)
+
+        lines.append(
+            f"│ {i:^3} │ {username} │"
+        )
+
+    lines.append(
+        "└─────┴──────────────────┘"
+    )
+
+    table = "\n".join(lines)
+
+    await message.answer(
+        "👥 <b>Список участников</b>\n\n"
+        f"<pre>{table}</pre>"
+    )
